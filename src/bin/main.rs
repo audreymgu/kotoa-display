@@ -8,6 +8,8 @@
 #![deny(clippy::large_stack_frames)]
 // #![deny(warnings)]
 
+use alloc::vec;
+use alloc::vec::Vec;
 use core::prelude::v1::*;
 use core::u8;
 use embedded_hal::delay::DelayNs;
@@ -94,14 +96,14 @@ fn main() -> ! {
     );
     // set dc pin
     let dc = peripherals.GPIO33;
-    let mut dc_output = Output::new(
+    let mut dc_out = Output::new(
         dc,
         esp_hal::gpio::Level::Low,
         OutputConfig::default().with_drive_mode(esp_hal::gpio::DriveMode::PushPull),
     );
     // set rst pin
     let rst = peripherals.GPIO19;
-    let mut rst_output = Output::new(
+    let mut rst_out = Output::new(
         rst,
         esp_hal::gpio::Level::Low,
         OutputConfig::default().with_drive_mode(esp_hal::gpio::DriveMode::PushPull),
@@ -109,14 +111,15 @@ fn main() -> ! {
     // set busy pin
     let busy = peripherals.GPIO32;
     let config = InputConfig::default().with_pull(Pull::Up);
-    let mut busy_input = Input::new(busy, config);
+    let mut busy_in = Input::new(busy, config);
 
-    // WAKE PANEL - - -
+    // RESET PANEL - - -
     let mut delay = Delay::new();
     let mut timer = timg0.timer1;
     delay.delay_ms(10u32);
-    reset_panel(&mut rst_output, &mut delay);
-    // initialize spi
+    delay.delay_ms(2000u32);
+    reset_panel(&mut rst_out, &mut delay);
+    // INITIALIZE SPI - - -
     let mut spi = Spi::new(
         peripherals.SPI2,
         Config::default()
@@ -127,56 +130,96 @@ fn main() -> ! {
     .with_sck(peripherals.GPIO18)
     .with_mosi(peripherals.GPIO23);
     let mut spi_device = ExclusiveDevice::new_no_delay(spi, cs_output).unwrap();
-    // configure panel
-    send_command(&mut spi_device, &mut dc_output, 0x04u8, &mut delay);
+
+    // CONFIGURE PANEL - - -
+    send_command(&mut spi_device, &mut dc_out, 0x04u8, &mut delay);
+    // TODO: replace with waitForEpd
+    delay.delay_ms(2000);
+    send_command(&mut spi_device, &mut dc_out, 0x00u8, &mut delay); // Enter panel setting
+    send_data(&mut spi_device, &mut dc_out, &[0x0fu8], &mut delay);
+    send_data(&mut spi_device, &mut dc_out, &[0x89u8], &mut delay);
+    send_command(&mut spi_device, &mut dc_out, 0x61u8, &mut delay); // Enter panel resolution setting
+    // set WIDTH and HEIGHT
+    const WIDTH: u8 = 104;
+    const HEIGHT: u16 = 212;
+    const MID: usize = (WIDTH as usize * HEIGHT as usize) / 8;
+    send_data(&mut spi_device, &mut dc_out, &[WIDTH], &mut delay);
+    send_data(
+        &mut spi_device,
+        &mut dc_out,
+        &[(HEIGHT >> 8) as u8],
+        &mut delay,
+    );
+    send_data(
+        &mut spi_device,
+        &mut dc_out,
+        &[(HEIGHT & 0xff) as u8],
+        &mut delay,
+    );
+    send_command(&mut spi_device, &mut dc_out, 0x50u8, &mut delay); // VCOM and data interval setting
+    send_data(&mut spi_device, &mut dc_out, &[0x77u8], &mut delay);
+
+    // BLANK OUT PANEL - - -
+    let mut buffer = [0xFF; (WIDTH as usize * HEIGHT as usize) / 4];
+
+    // BLANK BW PIXELS
+    send_command(&mut spi_device, &mut dc_out, 0x10u8, &mut delay);
+    send_data(&mut spi_device, &mut dc_out, &buffer[..MID], &mut delay);
+
+    // BLANK RED PIXELS
+    send_command(&mut spi_device, &mut dc_out, 0x13u8, &mut delay);
+    send_data(&mut spi_device, &mut dc_out, &buffer[MID..], &mut delay);
+
+    // STOP DATA TRANSFER - - -
+    send_command(&mut spi_device, &mut dc_out, 0x11u8, &mut delay); // VCOM and data interval setting
+    send_data(&mut spi_device, &mut dc_out, &[0x00u8], &mut delay);
+
+    // SEND DISPLAY REFRESH COMMAND - - -
+    send_command(&mut spi_device, &mut dc_out, 0x12u8, &mut delay);
+    delay.delay_micros(500u32);
+    // TODO: replace with waitForEpd
+    delay.delay_ms(10000u32);
 
     // EXAMPLE CODE BEGINS - - -
 
-    // Setup EPD Waveshare
-    let mut epd = Epd2in13bc::new(
-        &mut spi_device,
-        busy_input,
-        dc_output,
-        rst_output,
-        &mut delay,
-        None,
-    )
-    .unwrap();
+    // // Setup EPD Waveshare
+    // let mut epd =
+    //     Epd2in13bc::new(&mut spi_device, busy_in, dc_out, rst_out, &mut delay, None).unwrap();
 
-    // Use display graphics from embedded-graphics
-    // This display is for the black/white/chromatic pixels
-    let mut tricolor_display = Display2in13bc::default();
+    // // Use display graphics from embedded-graphics
+    // // This display is for the black/white/chromatic pixels
+    // let mut tricolor_display = Display2in13bc::default();
 
-    // Use embedded graphics for drawing a black line
-    let _ = Line::new(Point::new(0, 0), Point::new(220, 0))
-        .into_styled(PrimitiveStyle::with_stroke(TriColor::Black, 1))
-        .draw(&mut tricolor_display);
+    // // Use embedded graphics for drawing a black line
+    // let _ = Line::new(Point::new(0, 0), Point::new(220, 0))
+    //     .into_styled(PrimitiveStyle::with_stroke(TriColor::Black, 1))
+    //     .draw(&mut tricolor_display);
 
-    let _ = Line::new(Point::new(100, 120), Point::new(100, 200))
-        .into_styled(PrimitiveStyle::with_stroke(TriColor::Chromatic, 1))
-        .draw(&mut tricolor_display);
+    // let _ = Line::new(Point::new(100, 120), Point::new(100, 200))
+    //     .into_styled(PrimitiveStyle::with_stroke(TriColor::Chromatic, 1))
+    //     .draw(&mut tricolor_display);
 
-    let _ = Line::new(Point::new(100, 120), Point::new(0, 200))
-        .into_styled(PrimitiveStyle::with_stroke(TriColor::Chromatic, 1))
-        .draw(&mut tricolor_display);
+    // let _ = Line::new(Point::new(100, 120), Point::new(0, 200))
+    //     .into_styled(PrimitiveStyle::with_stroke(TriColor::Chromatic, 1))
+    //     .draw(&mut tricolor_display);
 
-    // We use `chromatic` but it will be shown as red/yellow
-    let _ = Line::new(Point::new(15, 120), Point::new(15, 200))
-        .into_styled(PrimitiveStyle::with_stroke(TriColor::Chromatic, 1))
-        .draw(&mut tricolor_display);
+    // // We use `chromatic` but it will be shown as red/yellow
+    // let _ = Line::new(Point::new(15, 120), Point::new(15, 200))
+    //     .into_styled(PrimitiveStyle::with_stroke(TriColor::Chromatic, 1))
+    //     .draw(&mut tricolor_display);
 
-    // Display updated frame
-    epd.update_color_frame(
-        &mut spi_device,
-        &mut delay,
-        &tricolor_display.bw_buffer(),
-        &tricolor_display.chromatic_buffer(),
-    )
-    .unwrap();
-    epd.display_frame(&mut spi_device, &mut delay).unwrap();
+    // // Display updated frame
+    // epd.update_color_frame(
+    //     &mut spi_device,
+    //     &mut delay,
+    //     &tricolor_display.bw_buffer(),
+    //     &tricolor_display.chromatic_buffer(),
+    // )
+    // .unwrap();
+    // epd.display_frame(&mut spi_device, &mut delay).unwrap();
 
-    // Set the EPD to sleep
-    epd.sleep(&mut spi_device, &mut delay).unwrap();
+    // // Set the EPD to sleep
+    // epd.sleep(&mut spi_device, &mut delay).unwrap();
 
     // EXAMPLE CODE ENDS - - -
 

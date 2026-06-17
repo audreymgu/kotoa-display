@@ -3,8 +3,11 @@ use embedded_hal::delay::DelayNs;
 use embedded_hal::spi::SpiDevice;
 use esp_hal::delay::Delay;
 use esp_hal::gpio::Input;
+use esp_hal::gpio::InputConfig;
 use esp_hal::gpio::Output;
-use esp_hal::time::{Duration, Instant};
+use esp_hal::gpio::OutputConfig;
+use esp_hal::gpio::Pull;
+use esp_hal::time::Duration;
 use esp_hal::timer::Timer;
 
 // INKPLATE PORT - - -
