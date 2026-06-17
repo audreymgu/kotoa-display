@@ -9,7 +9,9 @@
 // #![deny(warnings)]
 
 use core::prelude::v1::*;
+use core::u8;
 use embedded_hal::delay::DelayNs;
+use embedded_hal::spi::SpiDevice;
 use embedded_hal_bus::spi::ExclusiveDevice;
 use esp_backtrace as _;
 use esp_hal::clock::CpuClock;
@@ -39,6 +41,29 @@ extern crate alloc;
 // This creates a default app-descriptor required by the esp-idf bootloader.
 // For more information see: <https://docs.espressif.com/projects/esp-idf/en/stable/esp32/api-reference/system/app_image_format.html#application-description>
 esp_bootloader_esp_idf::esp_app_desc!();
+
+// INKPLATE PORT - - -
+fn reset_panel(rst_pin: &mut Output, delay: &mut Delay) {
+    rst_pin.set_low();
+    delay.delay_ms(100u32);
+    rst_pin.set_high();
+    delay.delay_ms(100u32);
+}
+
+fn send_command(spi_dev: &mut impl SpiDevice, dc_pin: &mut Output, command: u8, delay: &mut Delay) {
+    dc_pin.set_low();
+    delay.delay_us(10u32);
+    spi_dev.write(&[command]);
+    dc_pin.set_high();
+    delay.delay_ms(1u32);
+}
+
+fn send_data(spi_dev: &mut impl SpiDevice, dc_pin: &mut Output, data: &[u8], delay: &mut Delay) {
+    dc_pin.set_high();
+    delay.delay_us(10u32);
+    spi_dev.write(data);
+    delay.delay_ms(1u32);
+}
 
 #[allow(
     clippy::large_stack_frames,
@@ -83,7 +108,6 @@ fn main() -> ! {
             .expect("Failed to initialize Wi-Fi controller");
 
     // PIN SETUP - - -
-
     // set chip select pin
     let cs = peripherals.GPIO27;
     let cs_output = Output::new(
@@ -91,7 +115,6 @@ fn main() -> ! {
         esp_hal::gpio::Level::Low,
         OutputConfig::default().with_drive_mode(esp_hal::gpio::DriveMode::PushPull),
     );
-
     // set dc pin
     let dc = peripherals.GPIO33;
     let dc_output = Output::new(
@@ -99,25 +122,24 @@ fn main() -> ! {
         esp_hal::gpio::Level::Low,
         OutputConfig::default().with_drive_mode(esp_hal::gpio::DriveMode::PushPull),
     );
-
     // set rst pin
     let rst = peripherals.GPIO19;
-    let rst_output = Output::new(
+    let mut rst_output = Output::new(
         rst,
         esp_hal::gpio::Level::Low,
         OutputConfig::default().with_drive_mode(esp_hal::gpio::DriveMode::PushPull),
     );
-
     // set busy pin
     let busy = peripherals.GPIO32;
     let config = InputConfig::default().with_pull(Pull::Up);
     let busy_input = Input::new(busy, config);
 
-    // SPI DEVICE INITIALIZATION - - -
-
-    // create delay object
+    // WAKE PANEL - - -
     let mut delay = Delay::new();
+    delay.delay_ms(100u32);
+    reset_panel(&mut rst_output, &mut delay);
 
+    // SPI DEVICE INITIALIZATION - - -
     let mut spi = Spi::new(
         peripherals.SPI2,
         Config::default()
@@ -127,8 +149,7 @@ fn main() -> ! {
     .unwrap()
     .with_sck(peripherals.GPIO18)
     .with_mosi(peripherals.GPIO23);
-
-    // needs to take ownership
+    // ExclusiveDevice needs to take ownership of spi
     let mut spi_device = ExclusiveDevice::new_no_delay(spi, cs_output).unwrap();
 
     // EXAMPLE CODE BEGINS - - -
@@ -149,7 +170,7 @@ fn main() -> ! {
     let mut tricolor_display = Display2in13bc::default();
 
     // Use embedded graphics for drawing a black line
-    let _ = Line::new(Point::new(0, 120), Point::new(0, 200))
+    let _ = Line::new(Point::new(0, 0), Point::new(220, 0))
         .into_styled(PrimitiveStyle::with_stroke(TriColor::Black, 1))
         .draw(&mut tricolor_display);
 
