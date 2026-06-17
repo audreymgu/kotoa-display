@@ -9,6 +9,7 @@
 // #![deny(warnings)]
 
 use core::prelude::v1::*;
+use core::time;
 use core::u8;
 use embedded_hal::delay::DelayNs;
 use embedded_hal::spi::SpiDevice;
@@ -27,6 +28,7 @@ use esp_hal::spi::master::Config;
 use esp_hal::spi::master::Spi;
 use esp_hal::time::Rate;
 use esp_hal::time::{Duration, Instant};
+use esp_hal::timer::Timer;
 use esp_hal::timer::timg::TimerGroup;
 use log::info;
 
@@ -63,6 +65,26 @@ fn send_data(spi_dev: &mut impl SpiDevice, dc_pin: &mut Output, data: &[u8], del
     delay.delay_us(10u32);
     spi_dev.write(data);
     delay.delay_ms(1u32);
+}
+
+fn wait_for_epd(
+    busy_pin: &mut Input,
+    timeout: u64,
+    timer: &mut impl Timer,
+    delay: &mut Delay,
+) -> bool {
+    timer.load_value(Duration::from_millis(timeout)).unwrap();
+    timer.start();
+    while busy_pin.is_low() && !timer.is_interrupt_set() {
+        continue;
+    }
+    if busy_pin.is_low() {
+        timer.clear_interrupt();
+        return false;
+    }
+    timer.clear_interrupt();
+    delay.delay_ms(200u32);
+    true
 }
 
 #[allow(
@@ -117,7 +139,7 @@ fn main() -> ! {
     );
     // set dc pin
     let dc = peripherals.GPIO33;
-    let dc_output = Output::new(
+    let mut dc_output = Output::new(
         dc,
         esp_hal::gpio::Level::Low,
         OutputConfig::default().with_drive_mode(esp_hal::gpio::DriveMode::PushPull),
@@ -132,14 +154,14 @@ fn main() -> ! {
     // set busy pin
     let busy = peripherals.GPIO32;
     let config = InputConfig::default().with_pull(Pull::Up);
-    let busy_input = Input::new(busy, config);
+    let mut busy_input = Input::new(busy, config);
 
     // WAKE PANEL - - -
     let mut delay = Delay::new();
-    delay.delay_ms(100u32);
+    let mut timer = timg0.timer1;
+    delay.delay_ms(10u32);
     reset_panel(&mut rst_output, &mut delay);
-
-    // SPI DEVICE INITIALIZATION - - -
+    // initialize spi
     let mut spi = Spi::new(
         peripherals.SPI2,
         Config::default()
@@ -149,8 +171,9 @@ fn main() -> ! {
     .unwrap()
     .with_sck(peripherals.GPIO18)
     .with_mosi(peripherals.GPIO23);
-    // ExclusiveDevice needs to take ownership of spi
     let mut spi_device = ExclusiveDevice::new_no_delay(spi, cs_output).unwrap();
+    // configure panel
+    send_command(&mut spi_device, &mut dc_output, 0x04u8, &mut delay);
 
     // EXAMPLE CODE BEGINS - - -
 
