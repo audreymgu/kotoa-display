@@ -9,10 +9,8 @@
 // #![deny(warnings)]
 
 use core::prelude::v1::*;
-use core::time;
 use core::u8;
 use embedded_hal::delay::DelayNs;
-use embedded_hal::spi::SpiDevice;
 use embedded_hal_bus::spi::ExclusiveDevice;
 use esp_backtrace as _;
 use esp_hal::clock::CpuClock;
@@ -28,8 +26,8 @@ use esp_hal::spi::master::Config;
 use esp_hal::spi::master::Spi;
 use esp_hal::time::Rate;
 use esp_hal::time::{Duration, Instant};
-use esp_hal::timer::Timer;
 use esp_hal::timer::timg::TimerGroup;
+use kotoa_display::display_driver::*;
 use log::info;
 
 use embedded_graphics::{
@@ -43,49 +41,6 @@ extern crate alloc;
 // This creates a default app-descriptor required by the esp-idf bootloader.
 // For more information see: <https://docs.espressif.com/projects/esp-idf/en/stable/esp32/api-reference/system/app_image_format.html#application-description>
 esp_bootloader_esp_idf::esp_app_desc!();
-
-// INKPLATE PORT - - -
-fn reset_panel(rst_pin: &mut Output, delay: &mut Delay) {
-    rst_pin.set_low();
-    delay.delay_ms(100u32);
-    rst_pin.set_high();
-    delay.delay_ms(100u32);
-}
-
-fn send_command(spi_dev: &mut impl SpiDevice, dc_pin: &mut Output, command: u8, delay: &mut Delay) {
-    dc_pin.set_low();
-    delay.delay_us(10u32);
-    spi_dev.write(&[command]);
-    dc_pin.set_high();
-    delay.delay_ms(1u32);
-}
-
-fn send_data(spi_dev: &mut impl SpiDevice, dc_pin: &mut Output, data: &[u8], delay: &mut Delay) {
-    dc_pin.set_high();
-    delay.delay_us(10u32);
-    spi_dev.write(data);
-    delay.delay_ms(1u32);
-}
-
-fn wait_for_epd(
-    busy_pin: &mut Input,
-    timeout: u64,
-    timer: &mut impl Timer,
-    delay: &mut Delay,
-) -> bool {
-    timer.load_value(Duration::from_millis(timeout)).unwrap();
-    timer.start();
-    while busy_pin.is_low() && !timer.is_interrupt_set() {
-        continue;
-    }
-    if busy_pin.is_low() {
-        timer.clear_interrupt();
-        return false;
-    }
-    timer.clear_interrupt();
-    delay.delay_ms(200u32);
-    true
-}
 
 #[allow(
     clippy::large_stack_frames,
