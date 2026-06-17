@@ -50,7 +50,10 @@ smoltcp = { version = "0.13.0", default-features = false, features = [
   "socket-tcp",
   "socket-udp",
 ] }
+embedded-graphics = "0.8.2"
+embedded-hal = "1.0.0"
 epd-waveshare = "0.6.0"
+embedded-hal-bus = "0.3.0"
 
 
 # For fine tuning these settings, please refer to https://doc.rust-lang.org/cargo/reference/profiles.html

@@ -6,13 +6,33 @@
     holding buffers for the duration of a data transfer."
 )]
 #![deny(clippy::large_stack_frames)]
+// #![deny(warnings)]
 
+use core::prelude::v1::*;
+use embedded_hal::delay::DelayNs;
+use embedded_hal_bus::spi::ExclusiveDevice;
 use esp_backtrace as _;
 use esp_hal::clock::CpuClock;
+use esp_hal::delay::Delay;
+use esp_hal::gpio::Input;
+use esp_hal::gpio::InputConfig;
+use esp_hal::gpio::Output;
+use esp_hal::gpio::OutputConfig;
+use esp_hal::gpio::Pull;
 use esp_hal::main;
+use esp_hal::spi::Mode;
+use esp_hal::spi::master::Config;
+use esp_hal::spi::master::Spi;
+use esp_hal::time::Rate;
 use esp_hal::time::{Duration, Instant};
 use esp_hal::timer::timg::TimerGroup;
 use log::info;
+
+use embedded_graphics::{
+    prelude::*,
+    primitives::{Line, PrimitiveStyle, PrimitiveStyleBuilder},
+};
+use epd_waveshare::{epd2in13bc::*, prelude::*};
 
 extern crate alloc;
 
@@ -62,11 +82,108 @@ fn main() -> ! {
         esp_radio::wifi::new(peripherals.WIFI, Default::default())
             .expect("Failed to initialize Wi-Fi controller");
 
+    // PIN SETUP - - -
+
+    // set chip select pin
+    let cs = peripherals.GPIO27;
+    let cs_output = Output::new(
+        cs,
+        esp_hal::gpio::Level::Low,
+        OutputConfig::default().with_drive_mode(esp_hal::gpio::DriveMode::PushPull),
+    );
+
+    // set dc pin
+    let dc = peripherals.GPIO33;
+    let dc_output = Output::new(
+        dc,
+        esp_hal::gpio::Level::Low,
+        OutputConfig::default().with_drive_mode(esp_hal::gpio::DriveMode::PushPull),
+    );
+
+    // set rst pin
+    let rst = peripherals.GPIO19;
+    let rst_output = Output::new(
+        rst,
+        esp_hal::gpio::Level::Low,
+        OutputConfig::default().with_drive_mode(esp_hal::gpio::DriveMode::PushPull),
+    );
+
+    // set busy pin
+    let busy = peripherals.GPIO32;
+    let config = InputConfig::default().with_pull(Pull::Up);
+    let busy_input = Input::new(busy, config);
+
+    // SPI DEVICE INITIALIZATION - - -
+
+    // create delay object
+    let mut delay = Delay::new();
+
+    let mut spi = Spi::new(
+        peripherals.SPI2,
+        Config::default()
+            .with_frequency(Rate::from_khz(100))
+            .with_mode(Mode::_0),
+    )
+    .unwrap()
+    .with_sck(peripherals.GPIO18)
+    .with_mosi(peripherals.GPIO23);
+
+    // needs to take ownership
+    let mut spi_device = ExclusiveDevice::new_no_delay(spi, cs_output).unwrap();
+
+    // EXAMPLE CODE BEGINS - - -
+
+    // Setup EPD Waveshare
+    let mut epd = Epd2in13bc::new(
+        &mut spi_device,
+        busy_input,
+        dc_output,
+        rst_output,
+        &mut delay,
+        None,
+    )
+    .unwrap();
+
+    // Use display graphics from embedded-graphics
+    // This display is for the black/white/chromatic pixels
+    let mut tricolor_display = Display2in13bc::default();
+
+    // Use embedded graphics for drawing a black line
+    let _ = Line::new(Point::new(0, 120), Point::new(0, 200))
+        .into_styled(PrimitiveStyle::with_stroke(TriColor::Black, 1))
+        .draw(&mut tricolor_display);
+
+    let _ = Line::new(Point::new(100, 120), Point::new(100, 200))
+        .into_styled(PrimitiveStyle::with_stroke(TriColor::Chromatic, 1))
+        .draw(&mut tricolor_display);
+
+    let _ = Line::new(Point::new(100, 120), Point::new(0, 200))
+        .into_styled(PrimitiveStyle::with_stroke(TriColor::Chromatic, 1))
+        .draw(&mut tricolor_display);
+
+    // We use `chromatic` but it will be shown as red/yellow
+    let _ = Line::new(Point::new(15, 120), Point::new(15, 200))
+        .into_styled(PrimitiveStyle::with_stroke(TriColor::Chromatic, 1))
+        .draw(&mut tricolor_display);
+
+    // Display updated frame
+    epd.update_color_frame(
+        &mut spi_device,
+        &mut delay,
+        &tricolor_display.bw_buffer(),
+        &tricolor_display.chromatic_buffer(),
+    )
+    .unwrap();
+    epd.display_frame(&mut spi_device, &mut delay).unwrap();
+
+    // Set the EPD to sleep
+    epd.sleep(&mut spi_device, &mut delay).unwrap();
+
+    // EXAMPLE CODE ENDS - - -
+
     loop {
         info!("Hello world!");
         let delay_start = Instant::now();
         while delay_start.elapsed() < Duration::from_millis(500) {}
     }
-
-    // for inspiration have a look at the examples at https://github.com/esp-rs/esp-hal/tree/esp-hal-v1.1.0/examples
 }
