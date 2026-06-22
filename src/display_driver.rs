@@ -10,55 +10,111 @@ use esp_hal::gpio::Pull;
 use esp_hal::time::Duration;
 use esp_hal::timer::Timer;
 
-// INKPLATE PORT - - -
-pub fn reset_panel(rst_pin: &mut Output, delay: &mut Delay) {
-    rst_pin.set_low();
-    delay.delay_ms(100u32);
-    rst_pin.set_high();
-    delay.delay_ms(100u32);
+// set WIDTH and HEIGHT
+// this is hard-coded in landscape orientation
+const HEIGHT: u8 = 104;
+const WIDTH: u16 = 212;
+const MID: usize = (WIDTH as usize * HEIGHT as usize) / 8;
+
+pub struct DisplayDriver {
+    buffer: [u8; (WIDTH as usize * HEIGHT as usize) / 4],
 }
 
-pub fn send_command(
-    spi_dev: &mut impl SpiDevice,
-    dc_pin: &mut Output,
-    command: u8,
-    delay: &mut Delay,
-) {
-    dc_pin.set_low();
-    delay.delay_us(10u32);
-    spi_dev.write(&[command]);
-    dc_pin.set_high();
-    delay.delay_ms(1u32);
-}
-
-pub fn send_data(
-    spi_dev: &mut impl SpiDevice,
-    dc_pin: &mut Output,
-    data: &[u8],
-    delay: &mut Delay,
-) {
-    dc_pin.set_high();
-    delay.delay_us(10u32);
-    spi_dev.write(data);
-    delay.delay_ms(1u32);
-}
-
-pub fn wait_for_epd(
-    busy_pin: &mut Input,
-    timeout: u64,
-    timer: &mut impl Timer,
-    delay: &mut Delay,
-) -> bool {
-    timer.load_value(Duration::from_millis(timeout)).unwrap();
-    timer.start();
-    while busy_pin.is_low() && !timer.is_interrupt_set() {
-        continue;
+impl DisplayDriver {
+    pub fn new() -> Self {
+        DisplayDriver {
+            buffer: [0xFF; (WIDTH as usize * HEIGHT as usize) / 4],
+        }
     }
-    if busy_pin.is_low() {
+
+    pub fn reset_panel(rst_pin: &mut Output, delay: &mut Delay) {
+        rst_pin.set_low();
+        delay.delay_ms(100u32);
+        rst_pin.set_high();
+        delay.delay_ms(100u32);
+    }
+
+    pub fn send_command(
+        spi_dev: &mut impl SpiDevice,
+        dc_pin: &mut Output,
+        command: u8,
+        delay: &mut Delay,
+    ) {
+        dc_pin.set_low();
+        delay.delay_us(10u32);
+        spi_dev.write(&[command]);
+        dc_pin.set_high();
+        delay.delay_ms(1u32);
+    }
+
+    pub fn send_data(
+        spi_dev: &mut impl SpiDevice,
+        dc_pin: &mut Output,
+        data: &[u8],
+        delay: &mut Delay,
+    ) {
+        dc_pin.set_high();
+        delay.delay_us(10u32);
+        spi_dev.write(data);
+        delay.delay_ms(1u32);
+    }
+
+    pub fn wait_for_epd(
+        busy_pin: &mut Input,
+        timeout: u64,
+        timer: &mut impl Timer,
+        delay: &mut Delay,
+    ) -> bool {
+        timer.load_value(Duration::from_millis(timeout)).unwrap();
+        timer.start();
+        while busy_pin.is_low() && !timer.is_interrupt_set() {
+            continue;
+        }
+        if busy_pin.is_low() {
+            timer.clear_interrupt();
+            return false;
+        }
         timer.clear_interrupt();
-        return false;
+        delay.delay_ms(200u32);
+        true
     }
-    timer.clear_interrupt();
-    delay.delay_ms(200u32);
-    true
+
+    pub fn wake_panel(spi_device: &mut impl SpiDevice, dc_out: &mut Output, delay: &mut Delay) {
+        DisplayDriver::send_command(spi_device, dc_out, 0x04u8, delay);
+        // TODO: replace with waitForEpd
+        delay.delay_ms(2000);
+        DisplayDriver::send_command(spi_device, dc_out, 0x00u8, delay); // Enter panel setting
+        DisplayDriver::send_data(spi_device, dc_out, &[0x0fu8], delay);
+        DisplayDriver::send_data(spi_device, dc_out, &[0x89u8], delay);
+        DisplayDriver::send_command(spi_device, dc_out, 0x61u8, delay); // Enter panel resolution setting
+        DisplayDriver::send_data(spi_device, dc_out, &[HEIGHT], delay);
+        DisplayDriver::send_data(spi_device, dc_out, &[(WIDTH >> 8) as u8], delay);
+        DisplayDriver::send_data(spi_device, dc_out, &[(WIDTH & 0xff) as u8], delay);
+        DisplayDriver::send_command(spi_device, dc_out, 0x50u8, delay); // VCOM and data interval setting
+        DisplayDriver::send_data(spi_device, dc_out, &[0x77u8], delay);
+    }
+
+    pub fn display(&self, spi_device: &mut impl SpiDevice, dc_out: &mut Output, delay: &mut Delay) {
+        // update bw pixels
+        DisplayDriver::send_command(spi_device, dc_out, 0x10u8, delay);
+        DisplayDriver::send_data(spi_device, dc_out, &self.buffer[..MID], delay);
+
+        // update red pixels
+        DisplayDriver::send_command(spi_device, dc_out, 0x13u8, delay);
+        DisplayDriver::send_data(spi_device, dc_out, &self.buffer[MID..], delay);
+
+        // stop data transfer
+        DisplayDriver::send_command(spi_device, dc_out, 0x11u8, delay); // VCOM and data interval setting
+        DisplayDriver::send_data(spi_device, dc_out, &[0x00u8], delay);
+
+        // send display refresh command
+        DisplayDriver::send_command(spi_device, dc_out, 0x12u8, delay);
+        delay.delay_micros(500u32);
+        // TODO: replace with waitForEpd
+        delay.delay_ms(10000u32);
+    }
+
+    pub fn write_pixel_internal(x0: u16, y0: u16, color: u8) {
+        // early return if request is outside pixel bounds
+    }
 }
