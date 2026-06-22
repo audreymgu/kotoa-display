@@ -10,10 +10,11 @@ use esp_hal::gpio::Pull;
 use esp_hal::time::Duration;
 use esp_hal::timer::Timer;
 
+const MASK_LUT: [u8; 8] = [0x1, 0x2, 0x4, 0x8, 0x10, 0x20, 0x40, 0x80];
 // set WIDTH and HEIGHT
 // this is hard-coded in landscape orientation
-const HEIGHT: u8 = 104;
-const WIDTH: u16 = 212;
+const WIDTH: u8 = 104;
+const HEIGHT: u16 = 212;
 const MID: usize = (WIDTH as usize * HEIGHT as usize) / 8;
 
 pub struct DisplayDriver {
@@ -87,9 +88,9 @@ impl DisplayDriver {
         DisplayDriver::send_data(spi_device, dc_out, &[0x0fu8], delay);
         DisplayDriver::send_data(spi_device, dc_out, &[0x89u8], delay);
         DisplayDriver::send_command(spi_device, dc_out, 0x61u8, delay); // Enter panel resolution setting
-        DisplayDriver::send_data(spi_device, dc_out, &[HEIGHT], delay);
-        DisplayDriver::send_data(spi_device, dc_out, &[(WIDTH >> 8) as u8], delay);
-        DisplayDriver::send_data(spi_device, dc_out, &[(WIDTH & 0xff) as u8], delay);
+        DisplayDriver::send_data(spi_device, dc_out, &[WIDTH], delay);
+        DisplayDriver::send_data(spi_device, dc_out, &[(HEIGHT >> 8) as u8], delay);
+        DisplayDriver::send_data(spi_device, dc_out, &[(HEIGHT & 0xff) as u8], delay);
         DisplayDriver::send_command(spi_device, dc_out, 0x50u8, delay); // VCOM and data interval setting
         DisplayDriver::send_data(spi_device, dc_out, &[0x77u8], delay);
     }
@@ -114,7 +115,31 @@ impl DisplayDriver {
         delay.delay_ms(10000u32);
     }
 
-    pub fn write_pixel_internal(x0: u16, y0: u16, color: u8) {
+    pub fn write_pixel_internal(&mut self, x0: u16, y0: u16, color: u8) {
         // early return if request is outside pixel bounds
+        if x0 > WIDTH as u16 - 1 || y0 > HEIGHT - 1 {
+            return;
+        }
+        // locate column of bytes in row
+        let x_byte = x0 / 8;
+        // locate bit in byte
+        let x_bit = x0 % 8;
+        // collapse x and y positions to byte position in bit-packed array
+        // you can think of this as drilling down rows (via y0), then advancing by column (with x_byte)
+        // note that this does not handle the specific bit, that comes later
+        let byte_pos = WIDTH as u16 / 8 * y0 + x_byte;
+        // clear bw bit (set to 1)
+        self.buffer[byte_pos as usize] |= MASK_LUT[(7 - x_bit) as usize];
+        // clear red bit (set to 1)
+        self.buffer[byte_pos as usize + MID] |= MASK_LUT[(7 - x_bit) as usize];
+        // write bw bit
+        // if color is 0, bit remains unchanged from AND EQUALS
+        // example for bit 0x80
+        // 00000001 (Color) > 10000000 (Shifted) > 01111111 (Flipped) > MSB changed, all other bits left unchanged
+        if color < 2 {
+            self.buffer[byte_pos as usize] &= !(color << (7 - x_bit));
+        } else {
+            self.buffer[byte_pos as usize + MID] &= !(MASK_LUT[(7 - x_bit) as usize]);
+        }
     }
 }
