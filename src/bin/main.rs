@@ -31,8 +31,10 @@ use kotoa_display::display_driver::*;
 use log::info;
 
 use embedded_graphics::{
+    mono_font::{MonoTextStyle, ascii::FONT_6X10},
     prelude::*,
-    primitives::{Line, PrimitiveStyle, PrimitiveStyleBuilder},
+    primitives::{Circle, Line, PrimitiveStyle, PrimitiveStyleBuilder, Rectangle, Triangle},
+    text::Text,
 };
 
 extern crate alloc;
@@ -131,9 +133,14 @@ fn main() -> ! {
     let mut display = DisplayDriver::new();
     DisplayDriver::reset_panel(&mut rst_out, &mut delay);
     DisplayDriver::wake_panel(&mut spi_device, &mut dc_out, &mut delay);
-    DisplayDriver::write_pixel_internal(&mut display, 25, 25, 2);
-    DisplayDriver::write_pixel_internal(&mut display, 50, 50, 1);
-    DisplayDriver::write_pixel_internal(&mut display, 100, 100, 2);
+
+    // DRAW TO SCREEN - - -
+    let render_style = PrimitiveStyleBuilder::new()
+        .fill_color(DisplayColor::Red)
+        .build();
+    let circle = Circle::new(Point::new(50, 50), 25)
+        .into_styled(render_style)
+        .draw(&mut display);
     DisplayDriver::display(&display, &mut spi_device, &mut dc_out, &mut delay);
 
     loop {

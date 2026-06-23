@@ -1,4 +1,9 @@
 use core::u8;
+use embedded_graphics::Pixel;
+use embedded_graphics::pixelcolor::PixelColor;
+use embedded_graphics::prelude::DrawTarget;
+use embedded_graphics::prelude::OriginDimensions;
+use embedded_graphics::prelude::Size;
 use embedded_hal::delay::DelayNs;
 use embedded_hal::spi::SpiDevice;
 use esp_hal::delay::Delay;
@@ -117,29 +122,71 @@ impl DisplayDriver {
 
     pub fn write_pixel_internal(&mut self, x0: u16, y0: u16, color: u8) {
         // early return if request is outside pixel bounds
-        if x0 > WIDTH as u16 - 1 || y0 > HEIGHT - 1 {
+        // note this is hard-coded for LANDSCAPE orientation.
+        // TODO: implement rotation
+        if y0 > WIDTH as u16 - 1 || x0 > HEIGHT - 1 {
             return;
         }
+        let mut x_rot = y0;
+        let y_rot = x0;
+        x_rot = WIDTH as u16 - x_rot - 1;
         // locate column of bytes in row
-        let x_byte = x0 / 8;
+        let x_byte = x_rot / 8;
         // locate bit in byte
-        let x_bit = x0 % 8;
+        let x_bit = x_rot % 8;
         // collapse x and y positions to byte position in bit-packed array
         // you can think of this as drilling down rows (via y0), then advancing by column (with x_byte)
         // note that this does not handle the specific bit, that comes later
-        let byte_pos = WIDTH as u16 / 8 * y0 + x_byte;
+        let byte_pos = WIDTH as u16 / 8 * y_rot + x_byte;
         // clear bw bit (set to 1)
         self.buffer[byte_pos as usize] |= MASK_LUT[(7 - x_bit) as usize];
         // clear red bit (set to 1)
         self.buffer[byte_pos as usize + MID] |= MASK_LUT[(7 - x_bit) as usize];
         // write bw bit
-        // if color is 0, bit remains unchanged from AND EQUALS
-        // example for bit 0x80
+        // if color is 0, bit remains unchanged
+        // example transformation for bit 0x80
         // 00000001 (Color) > 10000000 (Shifted) > 01111111 (Flipped) > MSB changed, all other bits left unchanged
         if color < 2 {
             self.buffer[byte_pos as usize] &= !(color << (7 - x_bit));
         } else {
             self.buffer[byte_pos as usize + MID] &= !(MASK_LUT[(7 - x_bit) as usize]);
         }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DisplayColor {
+    White,
+    Black,
+    Red,
+}
+
+impl PixelColor for DisplayColor {
+    type Raw = ();
+}
+
+impl OriginDimensions for DisplayDriver {
+    fn size(&self) -> Size {
+        // remember, we are hardcoding a logical landscape ratio, hence the flip
+        Size::new(HEIGHT as u32, WIDTH as u32)
+    }
+}
+
+impl DrawTarget for DisplayDriver {
+    type Color = DisplayColor;
+    type Error = core::convert::Infallible;
+    fn draw_iter<I>(&mut self, pixels: I) -> Result<(), Self::Error>
+    where
+        I: IntoIterator<Item = Pixel<Self::Color>>,
+    {
+        for Pixel(point, color) in pixels {
+            let raw_color = match color {
+                DisplayColor::White => 0,
+                DisplayColor::Black => 1,
+                DisplayColor::Red => 2,
+            };
+            self.write_pixel_internal(point.x as u16, point.y as u16, raw_color);
+        }
+        Ok(())
     }
 }
